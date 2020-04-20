@@ -210,7 +210,7 @@ async fn handle_conn(conn: AcceptedConn, router: Rc<Router>) {
         // connection, so we need to clone things for each invocation.
         let router = router.clone();
         async move {
-            // This error type never occurs. Wish that ! worked.
+            // This error type never occurs. I wish that ! worked.
             Result::<_, Box<dyn std::error::Error + Send + Sync + 'static>>::Ok(handle_request(req, router).await)
         }
     });

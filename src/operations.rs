@@ -1,3 +1,12 @@
+mod complete_command;
+mod delete_commands;
+mod describe_command;
+mod describe_commands;
+mod dispatch_commands;
+mod heartbeat_command;
+mod receive_commands;
+mod start_command;
+
 use hyper::{Body, Method, Request, Response};
 use regex::{Captures, Regex, RegexSet};
 
@@ -40,7 +49,7 @@ impl Router {
 enum Operation {
     ReceiveCommands,
     DispatchCommands,
-    AcknowledgeCommand,
+    StartCommand,
     HeartbeatCommand,
     CompleteCommand,
     DescribeCommands,
@@ -53,7 +62,7 @@ impl Operation {
         &[
             Self::ReceiveCommands,
             Self::DispatchCommands,
-            Self::AcknowledgeCommand,
+            Self::StartCommand,
             Self::HeartbeatCommand,
             Self::CompleteCommand,
             Self::DescribeCommands,
@@ -66,7 +75,7 @@ impl Operation {
         match self {
             Self::ReceiveCommands => "/api/dispatch/receive_commands",
             Self::DispatchCommands => "/api/dispatch/dispatch_commands",
-            Self::AcknowledgeCommand => "/api/dispatch/acknowledge_command",
+            Self::StartCommand => "/api/dispatch/start_command",
             Self::HeartbeatCommand => "/api/dispatch/heartbeat_command",
             Self::CompleteCommand => "/api/dispatch/complete_command",
             Self::DescribeCommands => "/api/dispatch/describe_commands",
@@ -81,46 +90,14 @@ impl Operation {
 
     async fn invoke(&self, req: Request<Body>, path_regex: &Regex) -> Response<Body> {
         match self {
-            Self::ReceiveCommands => receive_commands(req, path_regex).await,
-            Self::DispatchCommands => dispatch_commands(req, path_regex).await,
-            Self::AcknowledgeCommand => acknowledge_command(req, path_regex).await,
-            Self::HeartbeatCommand => heartbeat_command(req, path_regex).await,
-            Self::CompleteCommand => complete_command(req, path_regex).await,
-            Self::DescribeCommands => describe_commands(req, path_regex).await,
-            Self::DescribeCommand => describe_command(req, path_regex).await,
-            Self::DeleteCommands => delete_commands(req, path_regex).await,
+            Self::ReceiveCommands => receive_commands::handle(req, path_regex).await,
+            Self::DispatchCommands => dispatch_commands::handle(req, path_regex).await,
+            Self::StartCommand => start_command::handle(req, path_regex).await,
+            Self::HeartbeatCommand => heartbeat_command::handle(req, path_regex).await,
+            Self::CompleteCommand => complete_command::handle(req, path_regex).await,
+            Self::DescribeCommands => describe_commands::handle(req, path_regex).await,
+            Self::DescribeCommand => describe_command::handle(req, path_regex).await,
+            Self::DeleteCommands => delete_commands::handle(req, path_regex).await,
         }
     }
-}
-
-async fn receive_commands(_req: Request<Body>, _path_regex: &Regex) -> Response<Body> {
-    Response::new(Body::from("receive_commands called"))
-}
-
-async fn dispatch_commands(_req: Request<Body>, _path_regex: &Regex) -> Response<Body> {
-    Response::new(Body::from("dispatch_commands called"))
-}
-
-async fn acknowledge_command(_req: Request<Body>, _path_regex: &Regex) -> Response<Body> {
-    Response::new(Body::from("acknowledge_command called"))
-}
-
-async fn heartbeat_command(_req: Request<Body>, _path_regex: &Regex) -> Response<Body> {
-    Response::new(Body::from("heartbeat_command called"))
-}
-
-async fn complete_command(_req: Request<Body>, _path_regex: &Regex) -> Response<Body> {
-    Response::new(Body::from("complete_command called"))
-}
-
-async fn describe_commands(_req: Request<Body>, _path_regex: &Regex) -> Response<Body> {
-    Response::new(Body::from("describe_commands called"))
-}
-
-async fn describe_command(_req: Request<Body>, _path_regex: &Regex) -> Response<Body> {
-    Response::new(Body::from("describe_command called"))
-}
-
-async fn delete_commands(_req: Request<Body>, _path_regex: &Regex) -> Response<Body> {
-    Response::new(Body::from("delete_commands called"))
 }
