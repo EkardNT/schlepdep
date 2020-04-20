@@ -126,11 +126,12 @@ fn worker_main(
                     // Due to lack of async-enabled mpmc channel, we spin in a try_recv()
                     // loop, yielding every iteration to allow other futures to execute.
                     // However this will result in a CPU busyloop. If we see a sustained
-                    // number of
+                    // number of empty queue results then we will put the task to sleep
+                    // to reduce CPU usage.
                     if consecutive_empties % 64 == 0 {
-                        // This will almost certainly not be actually 1ms, probably more
-                        // like 10-15ms.
-                        delay_for(Duration::from_millis(1)).await;
+                        // This delay is a tradeoff between additional latency on requests
+                        // and CPU usage.
+                        delay_for(Duration::from_millis(100)).await;
                     } else {
                         yield_now().await;
                     }
