@@ -7,12 +7,21 @@ mod heartbeat_command;
 mod receive_commands;
 mod start_command;
 
+use crate::errors::{
+    body_read_failed,
+    body_too_large,
+    req_json_parse,
+    internal,
+    no_content_length,
+};
 use crate::database::Database;
 
+use std::future::Future;
 use std::sync::Arc;
 
 use hyper::{Body, Method, Request, Response};
 use regex::{Captures, Regex, RegexSet};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub struct Router {
@@ -100,4 +109,61 @@ impl Operation {
             Self::DeleteCommands => delete_commands::handle(req).await,
         }
     }
+}
+
+pub async fn run_operation<Op, In, Out, Fut>(
+        req: Request<Body>,
+        database: Arc<Database>,
+        max_body_size: usize,
+        op: Op) -> Response<Body>
+where
+    Op: FnOnce(Request<In>, Arc<Database>) -> Fut,
+    In: for<'a> Deserialize<'a>,
+    Out: Serialize,
+    Fut: Future<Output = Response<Out>>
+{
+    let content_length = match req.headers().get("Content-Length")
+            .and_then(|header| header.to_str().ok())
+            .and_then(|header| header.parse::<usize>().ok()) {
+        Some(content_length) => content_length,
+        None => {
+            // TODO: debug log
+            return no_content_length();
+        }
+    };
+    if content_length > max_body_size {
+        // TODO: debug log
+        return body_too_large();
+    }
+    let (parts, in_body) = req.into_parts();
+    // TODO: custom version of to_bytes which stops as soon as the max_body_size is exceeded.
+    let bytes = match hyper::body::to_bytes(in_body).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            // TODO: debug log
+            return body_read_failed();
+        }
+    };
+    if bytes.len() > max_body_size {
+        // TODO: debug log
+        return body_too_large();
+    }
+    let input: In = match serde_json::from_slice(&bytes) {
+        Ok(input) => input,
+        Err(err) => {
+            // TODO: debug log
+            return req_json_parse();
+        }
+    };
+    let req = Request::from_parts(parts, input);
+    let (parts, output) = op(req, database).await.into_parts();
+    let out_bytes = match serde_json::to_vec(&output) {
+        Ok(out_bytes) => out_bytes,
+        Err(err) => {
+            // TODO: warn log
+            return internal();
+        }
+    };
+    let out_body = Body::from(out_bytes);
+    return Response::from_parts(parts, out_body);
 }

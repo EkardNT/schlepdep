@@ -1,4 +1,5 @@
 use crate::database::Database;
+use crate::operations::run_operation;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -65,18 +66,21 @@ pub struct Output {
     pub batch_id: String
 }
 
-pub async fn handle(_req: Request<Body>, _database: Arc<Database>) -> Response<Body> {
-    let batch_id = format!("{}", Uuid::new_v4().to_hyphenated());
-    // TODO:
-    // - Generate batch UUID.
-    // - Create idempotency record.
-    //      - Record's key should be computed based on a hash of the api name and all parameters.
-    //      - If already exists, replace the generated batch UUID with the one from the existing idempotency record.
-    // - Create command definition records
-    //      - If already exists, do nothing
-    // - Create command batch record
-    //      - If already exists, do nothing (do not overwrite!)
-    // - Check for remote poll against input target_name. If found, interrupt.
-    // - Return batch id.
-    Response::new(Body::from("dispatch_commands called"))
+pub async fn handle(req: Request<Body>, database: Arc<Database>) -> Response<Body> {
+    run_operation(req, database, 32 * 1024, |req: Request<Input>, database| async move {
+        let batch_id = format!("{}", Uuid::new_v4().to_hyphenated());
+
+        // TODO:
+        // - Generate batch UUID.
+        // - Create idempotency record.
+        //      - Record's key should be computed based on a hash of the api name and all parameters.
+        //      - If already exists, replace the generated batch UUID with the one from the existing idempotency record.
+        // - Create command definition records
+        //      - If already exists, do nothing
+        // - Create command batch record
+        //      - If already exists, do nothing (do not overwrite!)
+        // - Check for remote poll against input target_name. If found, interrupt.
+        // - Return batch id.
+        Response::new(Output { batch_id })
+    }).await
 }
