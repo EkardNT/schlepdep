@@ -1,3 +1,4 @@
+mod errors;
 mod operations;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -221,10 +222,7 @@ async fn handle_conn(conn: AcceptedConn, router: Rc<Router>) {
 }
 
 async fn handle_request(req: Request<Body>, router: Rc<Router>) -> Response<Body> {
-    router.route(req).await.unwrap_or_else(|| Response::builder()
-        .status(404)
-        .body(Body::from("No matching operation"))
-        .expect("Failed to build 404 response for unroutable request"))
+    router.route(req).await.unwrap_or_else(|| crate::errors::no_route())
 }
 
 // Copied from https://github.com/hyperium/hyper/blob/master/examples/single_threaded.rs
