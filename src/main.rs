@@ -5,7 +5,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::operations::Router;
 
@@ -23,6 +23,10 @@ use tokio::time::delay_for;
 
 const MAX_CONNS_PER_CORE: usize = 65536;
 const MAX_ACCEPT_QUEUE_PER_CORE: usize = 64;
+const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
+const ACCEPT_SOME_SPIN_FOR: Duration = Duration::from_millis(15);
+const ACCEPT_EMPTY_SPIN_FOR: Duration = Duration::from_secs(1);
+const ACCEPT_EMPTY_SPIN_BACKOFF: Duration = Duration::from_millis(100);
 
 struct AcceptedConn {
     stream: TcpStream,
@@ -103,9 +107,8 @@ fn worker_main(
     // Spawn a future which continuously reads from the accept_queue.
     local.spawn_local(async move {
         let router = Rc::new(Router::new());
-        // TODO: consider making these thresholds time-based rather than count-based.
-        let mut consecutive_empties = 0usize;
-        let mut consecutive_present = 0usize;
+        let mut prev_accept_empty = Instant::now();
+        let mut prev_accept_some = prev_accept_empty;
         loop {
             match accept_queue.try_recv() {
                 Ok(conn) => {
@@ -113,26 +116,25 @@ fn worker_main(
                     accept_queue_semaphore.add_permits(1);
                     // Handle the request in a separate task.
                     spawn_local(handle_conn(conn, router.clone()));
-                    consecutive_empties = 0;
-                    consecutive_present = consecutive_present.wrapping_add(1);
+                    prev_accept_some = Instant::now();
                     // If we get a bunch of new connections all at once, make sure to yield
                     // occasionally to allow response-generating futures to execute.
-                    if consecutive_present % 16 == 0 {
+                    if prev_accept_some.saturating_duration_since(prev_accept_empty) > ACCEPT_SOME_SPIN_FOR {
                         yield_now().await;
                     }
                 },
                 Err(TryRecvError::Empty) => {
-                    consecutive_empties = consecutive_empties.wrapping_add(1);
-                    consecutive_present = 0;
+                    let now = Instant::now();
+                    prev_accept_empty = now;
                     // Due to lack of async-enabled mpmc channel, we spin in a try_recv()
                     // loop, yielding every iteration to allow other futures to execute.
                     // However this will result in a CPU busyloop. If we see a sustained
                     // number of empty queue results then we will put the task to sleep
                     // to reduce CPU usage.
-                    if consecutive_empties % 64 == 0 {
+                    if prev_accept_empty.saturating_duration_since(prev_accept_some) > ACCEPT_EMPTY_SPIN_FOR {
                         // This delay is a tradeoff between additional latency on requests
                         // and CPU usage.
-                        delay_for(Duration::from_millis(100)).await;
+                        delay_for(ACCEPT_EMPTY_SPIN_BACKOFF).await;
                     } else {
                         yield_now().await;
                     }
@@ -153,7 +155,6 @@ fn acceptor_main(
         accept_queue: Sender<AcceptedConn>,
         max_conns_semaphore: Arc<Semaphore>,
         accept_queue_semaphore: Arc<Semaphore>) {
-    println!("Hello world! I'm an acceptor thread.");
     let mut rt = tokio::runtime::Builder::new()
         .basic_scheduler()
         .enable_all()
@@ -197,7 +198,7 @@ fn acceptor_main(
                     // TODO: warn log
                     // Release before waiting.
                     std::mem::drop(permit);
-                    delay_for(Duration::from_millis(15)).await;
+                    delay_for(ACCEPT_ERROR_BACKOFF).await;
                 }
             }
         }
