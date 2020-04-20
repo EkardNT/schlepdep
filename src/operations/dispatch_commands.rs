@@ -62,5 +62,16 @@ pub struct Output {
 }
 
 pub async fn handle(_req: Request<Body>) -> Response<Body> {
+    // TODO:
+    // - Generate batch UUID.
+    // - Create idempotency record.
+    //      - Record's key should be computed based on a hash of the api name and all parameters.
+    //      - If already exists, replace the generated batch UUID with the one from the existing idempotency record.
+    // - Create command definition records
+    //      - If already exists, do nothing
+    // - Create command batch record
+    //      - If already exists, do nothing (do not overwrite!)
+    // - Check for remote poll against input target_name. If found, interrupt.
+    // - Return batch id.
     Response::new(Body::from("dispatch_commands called"))
 }

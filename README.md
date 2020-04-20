@@ -12,3 +12,11 @@ TODO:
 - implement the dispatch API
 - shutdown with graceful draining
 - load testing
+
+On DispatchCommands:
+- Write commands
+- Check for poll
+
+On ReceiveCommands
+- Write poll
+- Check for work
