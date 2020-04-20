@@ -1,0 +1,13 @@
+[package]
+name = "schlepdep"
+version = "0.1.0"
+authors = ["Drake Tetreault <ekardnt@ekardnt.com>"]
+edition = "2018"
+
+[dependencies]
+core_affinity = "0.5"
+crossbeam = "0.7"
+futures = "0.3"
+hyper = { version = "0.13" }
+net2 = "0.2"
+tokio = { version = "0.2", features = ["full"] }
