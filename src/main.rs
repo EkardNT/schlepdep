@@ -1,10 +1,13 @@
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use core_affinity::CoreId;
 use crossbeam::channel::{self, Sender, Receiver, TryRecvError, TrySendError};
+use hyper::{Body, Request, Response, Version};
+use hyper::server::conn::Http;
+use hyper::service::service_fn;
 use net2::TcpBuilder;
 use net2::unix::UnixTcpBuilderExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -12,16 +15,24 @@ use tokio::sync::Semaphore;
 use tokio::task::{spawn_local, yield_now, LocalSet};
 use tokio::time::delay_for;
 
+const MAX_CONNS_PER_CORE: usize = 65536;
+const MAX_ACCEPT_QUEUE_PER_CORE: usize = 64;
+
+struct AcceptedConn {
+    stream: TcpStream,
+    remote_addr: SocketAddr
+}
+
 fn main() {
     let core_ids = core_affinity::get_core_ids()
         .expect("Failed to get core ids");
 
-    let max_conns = core_ids.len() * 65536;
+    let max_conns = core_ids.len() * MAX_CONNS_PER_CORE;
     let max_conns_semaphore = Arc::new(Semaphore::new(max_conns));
 
-    let max_conn_queue = core_ids.len() * 128;
-    let conn_queue_semaphore = Arc::new(Semaphore::new(max_conn_queue));
-    let (conn_queue_tx, conn_queue_rx) = channel::bounded(max_conn_queue);
+    let accept_queue_max = core_ids.len() * MAX_ACCEPT_QUEUE_PER_CORE;
+    let conn_queue_semaphore = Arc::new(Semaphore::new(accept_queue_max));
+    let (conn_queue_tx, conn_queue_rx) = channel::bounded(accept_queue_max);
 
     let worker_handles = start_worker_threads(&core_ids, conn_queue_rx, conn_queue_semaphore.clone());
     let acceptor_handles = start_acceptor_threads(&core_ids, conn_queue_tx, max_conns_semaphore, conn_queue_semaphore);
@@ -35,7 +46,7 @@ fn main() {
 
 fn start_worker_threads(
         core_ids: &[CoreId],
-        conn_queue: Receiver<TcpStream>,
+        conn_queue: Receiver<AcceptedConn>,
         conn_queue_semaphore: Arc<Semaphore>) -> Vec<JoinHandle<()>> {
     core_ids.iter().cloned().enumerate().map(|(thread_index, core_id)| {
         let conn_queue = conn_queue.clone();
@@ -54,7 +65,7 @@ fn start_worker_threads(
 
 fn start_acceptor_threads(
         core_ids: &[CoreId],
-        conn_queue: Sender<TcpStream>,
+        conn_queue: Sender<AcceptedConn>,
         max_conns_semaphore: Arc<Semaphore>,
         conn_queue_semaphore: Arc<Semaphore>) -> Vec<JoinHandle<()>> {
     core_ids.iter().cloned().enumerate().map(|(thread_index, core_id)| {
@@ -74,7 +85,7 @@ fn start_acceptor_threads(
 }
 
 fn worker_main(
-        conn_queue: Receiver<TcpStream>,
+        conn_queue: Receiver<AcceptedConn>,
         conn_queue_semaphore: Arc<Semaphore>) {
     println!("Hello world! I'm a worker thread.");
     let mut rt = tokio::runtime::Builder::new()
@@ -131,7 +142,7 @@ fn worker_main(
 }
 
 fn acceptor_main(
-        conn_queue: Sender<TcpStream>,
+        conn_queue: Sender<AcceptedConn>,
         max_conns_semaphore: Arc<Semaphore>,
         conn_queue_semaphore: Arc<Semaphore>) {
     println!("Hello world! I'm an acceptor thread.");
@@ -162,13 +173,13 @@ fn acceptor_main(
             let permit = conn_queue_semaphore.acquire().await;
 
             match listener.accept().await {
-                Ok((stream, _remote_addr)) => {
+                Ok((stream, remote_addr)) => {
                     // The two error cases are Full and Disconnected. Full should not happen
                     // because the conn_queue_semaphore is the same size as the conn_queue,
                     // so getting a permit should mean that the conn_queue has room.
                     // Disconnected should not happen because it is acceptors which listen
                     // for shutdown and drop their senders first.
-                    conn_queue.try_send(stream)
+                    conn_queue.try_send(AcceptedConn { stream, remote_addr })
                         .expect("Sending the new conn from the acceptor to the worker \
                             queue failed unexpectedly");
                     // The permit is added back by the worker thread which dequeues the connection.
@@ -185,6 +196,30 @@ fn acceptor_main(
     });
 }
 
-async fn handle_conn(conn: TcpStream) {
-    println!("Handling conn!");
+async fn handle_conn(conn: AcceptedConn) {
+    println!("Handling conn from {}", conn.remote_addr);
+
+    let service = service_fn(|req: Request<Body>| async move {
+        Result::<_, Box<dyn std::error::Error + Send + Sync + 'static>>::Ok(
+            Response::new(Body::from("Hello, world!")))
+    });
+    let mut http = Http::new().with_executor(LocalExec);
+    http.http1_only(true);
+    if let Err(err) = http.serve_connection(conn.stream, service).await {
+        // TODO: warn log
+    }
+}
+
+// Copied from https://github.com/hyperium/hyper/blob/master/examples/single_threaded.rs
+#[derive(Clone, Copy, Debug)]
+struct LocalExec;
+
+impl<F> hyper::rt::Executor<F> for LocalExec
+where
+    F: std::future::Future + 'static, // not requiring `Send`
+{
+    fn execute(&self, fut: F) {
+        // This will spawn into the currently running `LocalSet`.
+        spawn_local(fut);
+    }
 }
