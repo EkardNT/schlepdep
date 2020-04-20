@@ -1,3 +1,4 @@
+mod database;
 mod errors;
 mod operations;
 
@@ -7,6 +8,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::database::Database;
 use crate::operations::Router;
 
 use core_affinity::CoreId;
@@ -44,8 +46,19 @@ fn main() {
     let accept_queue_semaphore = Arc::new(Semaphore::new(accept_queue_max));
     let (accept_queue_tx, accept_queue_rx) = channel::bounded(accept_queue_max);
 
-    let worker_handles = start_worker_threads(&core_ids, accept_queue_rx, accept_queue_semaphore.clone());
-    let acceptor_handles = start_acceptor_threads(&core_ids, accept_queue_tx, max_conns_semaphore, accept_queue_semaphore);
+    let database = Arc::new(Database::local());
+
+    let worker_handles = start_worker_threads(
+        &core_ids,
+        accept_queue_rx,
+        accept_queue_semaphore.clone(),
+        database.clone());
+    let acceptor_handles = start_acceptor_threads(
+        &core_ids,
+        accept_queue_tx,
+        max_conns_semaphore,
+        accept_queue_semaphore,
+        database);
     for handle in worker_handles {
         handle.join().expect("Worker thread panicked");
     }
@@ -57,17 +70,19 @@ fn main() {
 fn start_worker_threads(
         core_ids: &[CoreId],
         accept_queue: Receiver<AcceptedConn>,
-        accept_queue_semaphore: Arc<Semaphore>) -> Vec<JoinHandle<()>> {
+        accept_queue_semaphore: Arc<Semaphore>,
+        database: Arc<Database>) -> Vec<JoinHandle<()>> {
     core_ids.iter().cloned().enumerate().map(|(thread_index, core_id)| {
         let accept_queue = accept_queue.clone();
         let accept_queue_semaphore = accept_queue_semaphore.clone();
+        let database = database.clone();
         let thread_name = format!("dispatch-worker-{}", thread_index);
         std::thread::Builder::new()
             .name(thread_name)
             .stack_size(10 * 1014 * 1024)
             .spawn(move || {
                 core_affinity::set_for_current(core_id);
-                worker_main(accept_queue, accept_queue_semaphore);
+                worker_main(accept_queue, accept_queue_semaphore, database);
             })
             .expect("Failed to spawn worker thread")
     }).collect()
@@ -77,7 +92,8 @@ fn start_acceptor_threads(
         core_ids: &[CoreId],
         accept_queue: Sender<AcceptedConn>,
         max_conns_semaphore: Arc<Semaphore>,
-        accept_queue_semaphore: Arc<Semaphore>) -> Vec<JoinHandle<()>> {
+        accept_queue_semaphore: Arc<Semaphore>,
+        database: Arc<Database>) -> Vec<JoinHandle<()>> {
     core_ids.iter().cloned().enumerate().map(|(thread_index, core_id)| {
         let accept_queue = accept_queue.clone();
         let max_conns_semaphore = max_conns_semaphore.clone();
@@ -96,7 +112,8 @@ fn start_acceptor_threads(
 
 fn worker_main(
         accept_queue: Receiver<AcceptedConn>,
-        accept_queue_semaphore: Arc<Semaphore>) {
+        accept_queue_semaphore: Arc<Semaphore>,
+        database: Arc<Database>) {
     println!("Hello world! I'm a worker thread.");
     let mut rt = tokio::runtime::Builder::new()
         .basic_scheduler()
@@ -115,7 +132,7 @@ fn worker_main(
                     // Allow more connections to be accept()ed.
                     accept_queue_semaphore.add_permits(1);
                     // Handle the request in a separate task.
-                    spawn_local(handle_conn(conn, router.clone()));
+                    spawn_local(handle_conn(conn, router.clone(), database.clone()));
                     prev_accept_some = Instant::now();
                     // If we get a bunch of new connections all at once, make sure to yield
                     // occasionally to allow response-generating futures to execute.
@@ -205,14 +222,17 @@ fn acceptor_main(
     });
 }
 
-async fn handle_conn(conn: AcceptedConn, router: Rc<Router>) {
+async fn handle_conn(conn: AcceptedConn, router: Rc<Router>, database: Arc<Database>) {
     let service = service_fn(|req: Request<Body>| {
         // This function may be invoked multiple times for pipelined requests on the same
         // connection, so we need to clone things for each invocation.
         let router = router.clone();
+        let database = database.clone();
         async move {
             // This error type never occurs. I wish that ! worked.
-            Result::<_, Box<dyn std::error::Error + Send + Sync + 'static>>::Ok(handle_request(req, router).await)
+            Result::<_, Box<dyn std::error::Error + Send + Sync + 'static>>::Ok(
+                handle_request(req, router, database).await
+            )
         }
     });
     let mut http = Http::new().with_executor(LocalExec);
@@ -222,8 +242,11 @@ async fn handle_conn(conn: AcceptedConn, router: Rc<Router>) {
     }
 }
 
-async fn handle_request(req: Request<Body>, router: Rc<Router>) -> Response<Body> {
-    router.route(req).await.unwrap_or_else(|| crate::errors::no_route())
+async fn handle_request(
+        req: Request<Body>,
+        router: Rc<Router>,
+        database: Arc<Database>) -> Response<Body> {
+    router.route(req, database).await.unwrap_or_else(|| crate::errors::no_route())
 }
 
 // Copied from https://github.com/hyperium/hyper/blob/master/examples/single_threaded.rs

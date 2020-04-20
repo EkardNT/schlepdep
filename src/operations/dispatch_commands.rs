@@ -1,7 +1,11 @@
+use crate::database::Database;
+
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use hyper::{Body, Method, Request, Response};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 // TODO: dispatcher permissions (or just infer from caller's auth mechanisms?).
 #[derive(Deserialize)]
@@ -61,7 +65,8 @@ pub struct Output {
     pub batch_id: String
 }
 
-pub async fn handle(_req: Request<Body>) -> Response<Body> {
+pub async fn handle(_req: Request<Body>, _database: Arc<Database>) -> Response<Body> {
+    let batch_id = format!("{}", Uuid::new_v4().to_hyphenated());
     // TODO:
     // - Generate batch UUID.
     // - Create idempotency record.

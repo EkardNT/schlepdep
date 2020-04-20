@@ -7,6 +7,10 @@ mod heartbeat_command;
 mod receive_commands;
 mod start_command;
 
+use crate::database::Database;
+
+use std::sync::Arc;
+
 use hyper::{Body, Method, Request, Response};
 use regex::{Captures, Regex, RegexSet};
 
@@ -28,12 +32,12 @@ impl Router {
         }
     }
 
-    pub async fn route(&self, req: Request<Body>) -> Option<Response<Body>> {
+    pub async fn route(&self, req: Request<Body>, database: Arc<Database>) -> Option<Response<Body>> {
         // So few operations that doing anything more complicated is pointless.
         for op_index in self.path_set.matches(req.uri().path()) {
             if let Some(op) = self.all_operations.get(op_index) {
                 if req.method() == op.method() {
-                    return Some(op.invoke(req).await);
+                    return Some(op.invoke(req, database).await);
                 }
             }
         }
@@ -84,10 +88,10 @@ impl Operation {
         &Method::POST
     }
 
-    async fn invoke(&self, req: Request<Body>) -> Response<Body> {
+    async fn invoke(&self, req: Request<Body>, database: Arc<Database>) -> Response<Body> {
         match self {
             Self::ReceiveCommands => receive_commands::handle(req).await,
-            Self::DispatchCommands => dispatch_commands::handle(req).await,
+            Self::DispatchCommands => dispatch_commands::handle(req, database).await,
             Self::StartCommand => start_command::handle(req).await,
             Self::HeartbeatCommand => heartbeat_command::handle(req).await,
             Self::CompleteCommand => complete_command::handle(req).await,
