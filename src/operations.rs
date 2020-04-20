@@ -13,7 +13,7 @@ use regex::{Captures, Regex, RegexSet};
 #[derive(Clone)]
 pub struct Router {
     path_set: RegexSet,
-    all_operations: Vec<(Operation, Regex)>
+    all_operations: Vec<Operation>
 }
 
 impl Router {
@@ -21,9 +21,7 @@ impl Router {
         let path_set = RegexSet::new(Operation::all().iter()
             .map(|op| op.path_regex()))
             .expect("One of the operation regexes was invalid");
-        let all_operations = Operation::all().iter()
-            .map(|op| (*op, Regex::new(op.path_regex()).expect("Invalid regex")))
-            .collect();
+        let all_operations = Operation::all().iter().cloned().collect();
         Self {
             path_set,
             all_operations
@@ -33,11 +31,9 @@ impl Router {
     pub async fn route(&self, req: Request<Body>) -> Option<Response<Body>> {
         // So few operations that doing anything more complicated is pointless.
         for op_index in self.path_set.matches(req.uri().path()) {
-            if let Some((op, regex)) = self.all_operations.get(op_index) {
+            if let Some(op) = self.all_operations.get(op_index) {
                 if req.method() == op.method() {
-                    // Pass down a reference to the regex so that handlers can inspect
-                    // capture groups if necessary (to extract parameters).
-                    return Some(op.invoke(req, &regex).await);
+                    return Some(op.invoke(req).await);
                 }
             }
         }
@@ -45,7 +41,7 @@ impl Router {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 enum Operation {
     ReceiveCommands,
     DispatchCommands,
@@ -88,16 +84,16 @@ impl Operation {
         &Method::POST
     }
 
-    async fn invoke(&self, req: Request<Body>, path_regex: &Regex) -> Response<Body> {
+    async fn invoke(&self, req: Request<Body>) -> Response<Body> {
         match self {
-            Self::ReceiveCommands => receive_commands::handle(req, path_regex).await,
-            Self::DispatchCommands => dispatch_commands::handle(req, path_regex).await,
-            Self::StartCommand => start_command::handle(req, path_regex).await,
-            Self::HeartbeatCommand => heartbeat_command::handle(req, path_regex).await,
-            Self::CompleteCommand => complete_command::handle(req, path_regex).await,
-            Self::DescribeCommands => describe_commands::handle(req, path_regex).await,
-            Self::DescribeCommand => describe_command::handle(req, path_regex).await,
-            Self::DeleteCommands => delete_commands::handle(req, path_regex).await,
+            Self::ReceiveCommands => receive_commands::handle(req).await,
+            Self::DispatchCommands => dispatch_commands::handle(req).await,
+            Self::StartCommand => start_command::handle(req).await,
+            Self::HeartbeatCommand => heartbeat_command::handle(req).await,
+            Self::CompleteCommand => complete_command::handle(req).await,
+            Self::DescribeCommands => describe_commands::handle(req).await,
+            Self::DescribeCommand => describe_command::handle(req).await,
+            Self::DeleteCommands => delete_commands::handle(req).await,
         }
     }
 }

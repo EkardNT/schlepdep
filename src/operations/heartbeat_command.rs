@@ -1,5 +1,4 @@
 use hyper::{Body, Method, Request, Response};
-use regex::{Captures, Regex, RegexSet};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -22,6 +21,6 @@ pub enum Output {
     Continue
 }
 
-pub async fn handle(_req: Request<Body>, _path_regex: &Regex) -> Response<Body> {
+pub async fn handle(_req: Request<Body>) -> Response<Body> {
     Response::new(Body::from("heartbeat_command called"))
 }

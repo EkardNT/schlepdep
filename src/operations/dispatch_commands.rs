@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use hyper::{Body, Method, Request, Response};
-use regex::{Captures, Regex, RegexSet};
 use serde::{Deserialize, Serialize};
 
 // TODO: dispatcher permissions (or just infer from caller's auth mechanisms?).
@@ -62,6 +61,6 @@ pub struct Output {
     pub batch_id: String
 }
 
-pub async fn handle(_req: Request<Body>, _path_regex: &Regex) -> Response<Body> {
+pub async fn handle(_req: Request<Body>) -> Response<Body> {
     Response::new(Body::from("dispatch_commands called"))
 }

@@ -1,5 +1,4 @@
 use hyper::{Body, Method, Request, Response};
-use regex::{Captures, Regex, RegexSet};
 use serde::{Deserialize, Serialize};
 
 // TODO: permissions policy for which dispatchers the executor is willing to receive commands
@@ -50,6 +49,6 @@ pub struct Command {
     pub heartbeat_interval_millis: usize
 }
 
-pub async fn handle(_req: Request<Body>, _path_regex: &Regex) -> Response<Body> {
+pub async fn handle(_req: Request<Body>) -> Response<Body> {
     Response::new(Body::from("receive_commands called"))
 }
