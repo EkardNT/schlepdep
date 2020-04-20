@@ -1,7 +1,12 @@
+mod operations;
+
 use std::net::{Ipv4Addr, SocketAddr};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
+
+use crate::operations::Router;
 
 use core_affinity::CoreId;
 use crossbeam::channel::{self, Sender, Receiver, TryRecvError, TrySendError};
@@ -96,6 +101,7 @@ fn worker_main(
     let local = LocalSet::new();
     // Spawn a future which continuously reads from the conn_queue.
     local.spawn_local(async move {
+        let router = Rc::new(Router::new());
         // TODO: consider making these thresholds time-based rather than count-based.
         let mut consecutive_empties = 0usize;
         let mut consecutive_present = 0usize;
@@ -105,7 +111,7 @@ fn worker_main(
                     // Allow more connections to be accept()ed.
                     conn_queue_semaphore.add_permits(1);
                     // Handle the request in a separate task.
-                    spawn_local(handle_conn(conn));
+                    spawn_local(handle_conn(conn, router.clone()));
                     consecutive_empties = 0;
                     consecutive_present = consecutive_present.wrapping_add(1);
                     // If we get a bunch of new connections all at once, make sure to yield
@@ -196,18 +202,28 @@ fn acceptor_main(
     });
 }
 
-async fn handle_conn(conn: AcceptedConn) {
-    println!("Handling conn from {}", conn.remote_addr);
-
-    let service = service_fn(|req: Request<Body>| async move {
-        Result::<_, Box<dyn std::error::Error + Send + Sync + 'static>>::Ok(
-            Response::new(Body::from("Hello, world!")))
+async fn handle_conn(conn: AcceptedConn, router: Rc<Router>) {
+    let service = service_fn(|req: Request<Body>| {
+        // This function may be invoked multiple times for pipelined requests on the same
+        // connection, so we need to clone things for each invocation.
+        let router = router.clone();
+        async move {
+            // This error type never occurs. Wish that ! worked.
+            Result::<_, Box<dyn std::error::Error + Send + Sync + 'static>>::Ok(handle_request(req, router).await)
+        }
     });
     let mut http = Http::new().with_executor(LocalExec);
     http.http1_only(true);
     if let Err(err) = http.serve_connection(conn.stream, service).await {
         // TODO: warn log
     }
+}
+
+async fn handle_request(req: Request<Body>, router: Rc<Router>) -> Response<Body> {
+    router.route(req).await.unwrap_or_else(|| Response::builder()
+        .status(404)
+        .body(Body::from("No matching operation"))
+        .expect("Failed to build 404 response for unroutable request"))
 }
 
 // Copied from https://github.com/hyperium/hyper/blob/master/examples/single_threaded.rs
