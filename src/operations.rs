@@ -52,8 +52,8 @@ impl Operation {
 
     fn path_regex(&self) -> &'static str {
         match self {
-            Self::ReceiveCommands => "/dispatch/receive_commands",
-            Self::DispatchCommands => "/dispatch/dispatch_commands",
+            Self::ReceiveCommands => "/api/dispatch/receive_commands",
+            Self::DispatchCommands => "/api/dispatch/dispatch_commands",
         }
     }
 
