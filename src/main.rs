@@ -36,11 +36,11 @@ fn main() {
     let max_conns_semaphore = Arc::new(Semaphore::new(max_conns));
 
     let accept_queue_max = core_ids.len() * MAX_ACCEPT_QUEUE_PER_CORE;
-    let conn_queue_semaphore = Arc::new(Semaphore::new(accept_queue_max));
-    let (conn_queue_tx, conn_queue_rx) = channel::bounded(accept_queue_max);
+    let accept_queue_semaphore = Arc::new(Semaphore::new(accept_queue_max));
+    let (accept_queue_tx, accept_queue_rx) = channel::bounded(accept_queue_max);
 
-    let worker_handles = start_worker_threads(&core_ids, conn_queue_rx, conn_queue_semaphore.clone());
-    let acceptor_handles = start_acceptor_threads(&core_ids, conn_queue_tx, max_conns_semaphore, conn_queue_semaphore);
+    let worker_handles = start_worker_threads(&core_ids, accept_queue_rx, accept_queue_semaphore.clone());
+    let acceptor_handles = start_acceptor_threads(&core_ids, accept_queue_tx, max_conns_semaphore, accept_queue_semaphore);
     for handle in worker_handles {
         handle.join().expect("Worker thread panicked");
     }
@@ -51,18 +51,18 @@ fn main() {
 
 fn start_worker_threads(
         core_ids: &[CoreId],
-        conn_queue: Receiver<AcceptedConn>,
-        conn_queue_semaphore: Arc<Semaphore>) -> Vec<JoinHandle<()>> {
+        accept_queue: Receiver<AcceptedConn>,
+        accept_queue_semaphore: Arc<Semaphore>) -> Vec<JoinHandle<()>> {
     core_ids.iter().cloned().enumerate().map(|(thread_index, core_id)| {
-        let conn_queue = conn_queue.clone();
-        let conn_queue_semaphore = conn_queue_semaphore.clone();
+        let accept_queue = accept_queue.clone();
+        let accept_queue_semaphore = accept_queue_semaphore.clone();
         let thread_name = format!("dispatch-worker-{}", thread_index);
         std::thread::Builder::new()
             .name(thread_name)
             .stack_size(10 * 1014 * 1024)
             .spawn(move || {
                 core_affinity::set_for_current(core_id);
-                worker_main(conn_queue, conn_queue_semaphore);
+                worker_main(accept_queue, accept_queue_semaphore);
             })
             .expect("Failed to spawn worker thread")
     }).collect()
@@ -70,28 +70,28 @@ fn start_worker_threads(
 
 fn start_acceptor_threads(
         core_ids: &[CoreId],
-        conn_queue: Sender<AcceptedConn>,
+        accept_queue: Sender<AcceptedConn>,
         max_conns_semaphore: Arc<Semaphore>,
-        conn_queue_semaphore: Arc<Semaphore>) -> Vec<JoinHandle<()>> {
+        accept_queue_semaphore: Arc<Semaphore>) -> Vec<JoinHandle<()>> {
     core_ids.iter().cloned().enumerate().map(|(thread_index, core_id)| {
-        let conn_queue = conn_queue.clone();
+        let accept_queue = accept_queue.clone();
         let max_conns_semaphore = max_conns_semaphore.clone();
-        let conn_queue_semaphore = conn_queue_semaphore.clone();
+        let accept_queue_semaphore = accept_queue_semaphore.clone();
         let thread_name = format!("dispatch-acceptor-{}", thread_index);
         std::thread::Builder::new()
             .name(thread_name)
             .stack_size(10 * 1024)
             .spawn(move || {
                 core_affinity::set_for_current(core_id);
-                acceptor_main(conn_queue, max_conns_semaphore, conn_queue_semaphore);
+                acceptor_main(accept_queue, max_conns_semaphore, accept_queue_semaphore);
             })
             .expect("Failed to spawn acceptor thread")
     }).collect()
 }
 
 fn worker_main(
-        conn_queue: Receiver<AcceptedConn>,
-        conn_queue_semaphore: Arc<Semaphore>) {
+        accept_queue: Receiver<AcceptedConn>,
+        accept_queue_semaphore: Arc<Semaphore>) {
     println!("Hello world! I'm a worker thread.");
     let mut rt = tokio::runtime::Builder::new()
         .basic_scheduler()
@@ -99,17 +99,17 @@ fn worker_main(
         .build()
         .expect("Failed to build tokio runtime on worker thread");
     let local = LocalSet::new();
-    // Spawn a future which continuously reads from the conn_queue.
+    // Spawn a future which continuously reads from the accept_queue.
     local.spawn_local(async move {
         let router = Rc::new(Router::new());
         // TODO: consider making these thresholds time-based rather than count-based.
         let mut consecutive_empties = 0usize;
         let mut consecutive_present = 0usize;
         loop {
-            match conn_queue.try_recv() {
+            match accept_queue.try_recv() {
                 Ok(conn) => {
                     // Allow more connections to be accept()ed.
-                    conn_queue_semaphore.add_permits(1);
+                    accept_queue_semaphore.add_permits(1);
                     // Handle the request in a separate task.
                     spawn_local(handle_conn(conn, router.clone()));
                     consecutive_empties = 0;
@@ -143,15 +143,15 @@ fn worker_main(
             };
         }
     });
-    // Block until the LocalSet is complete, aka both the conn_queue reader task and the
+    // Block until the LocalSet is complete, aka both the accept_queue reader task and the
     // spawned per-connection tasks are complete.
     rt.block_on(local);
 }
 
 fn acceptor_main(
-        conn_queue: Sender<AcceptedConn>,
+        accept_queue: Sender<AcceptedConn>,
         max_conns_semaphore: Arc<Semaphore>,
-        conn_queue_semaphore: Arc<Semaphore>) {
+        accept_queue_semaphore: Arc<Semaphore>) {
     println!("Hello world! I'm an acceptor thread.");
     let mut rt = tokio::runtime::Builder::new()
         .basic_scheduler()
@@ -169,7 +169,7 @@ fn acceptor_main(
         .expect("Failed to bind socket")
         .listen(128)
         .expect("Failed to begin listening on socket");
-    // Continuously accept connections and sends them to the conn_queue.
+    // Continuously accept connections and sends them to the accept_queue.
     rt.block_on(async move {
         let mut listener = TcpListener::from_std(listener)
             .expect("Failed to convert std TcpListener to tokio");
@@ -177,16 +177,16 @@ fn acceptor_main(
         loop {
             // Do not immediately forget() this permit so that it can be released in case of
             // accept error.
-            let permit = conn_queue_semaphore.acquire().await;
+            let permit = accept_queue_semaphore.acquire().await;
 
             match listener.accept().await {
                 Ok((stream, remote_addr)) => {
                     // The two error cases are Full and Disconnected. Full should not happen
-                    // because the conn_queue_semaphore is the same size as the conn_queue,
-                    // so getting a permit should mean that the conn_queue has room.
+                    // because the accept_queue_semaphore is the same size as the accept_queue,
+                    // so getting a permit should mean that the accept_queue has room.
                     // Disconnected should not happen because it is acceptors which listen
                     // for shutdown and drop their senders first.
-                    conn_queue.try_send(AcceptedConn { stream, remote_addr })
+                    accept_queue.try_send(AcceptedConn { stream, remote_addr })
                         .expect("Sending the new conn from the acceptor to the worker \
                             queue failed unexpectedly");
                     // The permit is added back by the worker thread which dequeues the connection.
