@@ -123,6 +123,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dispatch-service"
+version = "0.1.0"
+dependencies = [
+ "core_affinity",
+ "crossbeam",
+ "futures",
+ "hyper",
+ "net2",
+ "regex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -628,22 +644,6 @@ name = "ryu"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "535622e6be132bccd223f4bb2b8ac8d53cda3c7a6394944d3b2b33fb974f9d76"
-
-[[package]]
-name = "schlepdep"
-version = "0.1.0"
-dependencies = [
- "core_affinity",
- "crossbeam",
- "futures",
- "hyper",
- "net2",
- "regex",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
 
 [[package]]
 name = "scopeguard"

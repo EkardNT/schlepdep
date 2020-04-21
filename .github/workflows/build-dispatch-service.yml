@@ -1,19 +1,24 @@
-name: Build Dispatch Service 1
+name: Dispatch Service Updates
 
 on:
   push:
     branches: [ master ]
-  pull_request:
-    branches: [ master ]
+    paths: 'dispatch-service/**'
 
 jobs:
-  build:
-
+  build_and_test:
+    name: Run tests and produces binaries
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v2
-    - name: Build
-      run: cargo build --verbose
+    - name: Check out repository
+      uses: actions/checkout@v2
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --verbose -p dispatch-service
+    - name: Build binaries
+      run: cargo build --release --verbose -p dispatch-service
+    - name: Publish artifacts
+      uses: actions/upload-artifact@v1
+      with:
+        name: dispatch-service-executable
+        path: target/release/dispatch-service
+
