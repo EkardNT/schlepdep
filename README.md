@@ -20,3 +20,8 @@ On DispatchCommands:
 On ReceiveCommands
 - Write poll
 - Check for work
+
+How infrastructure works:
+- Some things need to be set up manually per account:
+    - Route53 hosted zone creation
+    - ACM certificate.
