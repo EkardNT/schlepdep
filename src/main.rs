@@ -1,6 +1,7 @@
 mod database;
 mod errors;
 mod operations;
+mod records;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::rc::Rc;
